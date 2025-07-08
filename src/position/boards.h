@@ -21,6 +21,8 @@
 #include "../types.h"
 
 #include <array>
+#include <bit>
+#include <immintrin.h>
 
 #include "../bitboard.h"
 
@@ -300,16 +302,12 @@ namespace stormphrax {
         [[nodiscard]] inline bool operator==(const BitboardSet& other) const = default;
 
     private:
-        std::array<Bitboard, 2> m_colors{};
         std::array<Bitboard, 6> m_pieces{};
+        std::array<Bitboard, 2> m_colors{};
     };
 
     class PositionBoards {
     public:
-        PositionBoards() {
-            m_mailbox.fill(Piece::kNone);
-        }
-
         [[nodiscard]] inline const BitboardSet& bbs() const {
             return m_bbs;
         }
@@ -321,13 +319,28 @@ namespace stormphrax {
         [[nodiscard]] inline PieceType pieceTypeAt(Square square) const {
             assert(square != Square::kNone);
 
-            const auto piece = m_mailbox[static_cast<i32>(square)];
-            return piece == Piece::kNone ? PieceType::kNone : pieceType(piece);
+            const auto p = squareLookup(square);
+
+            if (p == 0) {
+                return PieceType::kNone;
+            }
+
+            return static_cast<PieceType>(std::countr_zero(p));
         }
 
         [[nodiscard]] inline Piece pieceOn(Square square) const {
             assert(square != Square::kNone);
-            return m_mailbox[static_cast<i32>(square)];
+
+            const auto p = squareLookup(square);
+
+            if (p == 0) {
+                return Piece::kNone;
+            }
+
+            const auto color = static_cast<Color>(p >> 7);
+            const auto piece = static_cast<PieceType>(std::countr_zero(p));
+
+            return colorPiece(piece, color);
         }
 
         [[nodiscard]] inline Piece pieceAt(u32 rank, u32 file) const {
@@ -340,8 +353,6 @@ namespace stormphrax {
 
             assert(pieceOn(square) == Piece::kNone);
 
-            slot(square) = piece;
-
             const auto mask = Bitboard::fromSquare(square);
 
             m_bbs.forPiece(pieceType(piece)) ^= mask;
@@ -351,12 +362,6 @@ namespace stormphrax {
         inline void movePiece(Square src, Square dst, Piece piece) {
             assert(src != Square::kNone);
             assert(dst != Square::kNone);
-
-            if (slot(src) == piece) {
-                [[likely]] slot(src) = Piece::kNone;
-            }
-
-            slot(dst) = piece;
 
             const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
 
@@ -373,10 +378,6 @@ namespace stormphrax {
             assert(promo != PieceType::kNone);
 
             assert(pieceOn(src) == moving);
-            assert(slot(src) == moving);
-
-            slot(src) = Piece::kNone;
-            slot(dst) = copyPieceColor(moving, promo);
 
             m_bbs.forPiece(pieceType(moving))[src] = false;
             m_bbs.forPiece(promo)[dst] = true;
@@ -391,35 +392,21 @@ namespace stormphrax {
 
             assert(pieceOn(square) == piece);
 
-            slot(square) = Piece::kNone;
-
             m_bbs.forPiece(pieceType(piece))[square] = false;
             m_bbs.forColor(pieceColor(piece))[square] = false;
         }
 
-        inline void regenFromBbs() {
-            m_mailbox.fill(Piece::kNone);
-
-            for (u32 pieceIdx = 0; pieceIdx < 12; ++pieceIdx) {
-                const auto piece = static_cast<Piece>(pieceIdx);
-
-                auto board = m_bbs.forPiece(piece);
-                while (!board.empty()) {
-                    const auto sq = board.popLowestSquare();
-                    assert(slot(sq) == Piece::kNone);
-                    slot(sq) = piece;
-                }
-            }
-        }
+        inline void regenFromBbs() {}
 
         [[nodiscard]] inline bool operator==(const PositionBoards& other) const = default;
 
     private:
-        [[nodiscard]] inline Piece& slot(Square square) {
-            return m_mailbox[static_cast<i32>(square)];
+        [[nodiscard]] inline u8 squareLookup(Square square) const {
+            static_assert(sizeof(BitboardSet) == sizeof(__m512i));
+            const auto bit = _mm512_set1_epi64(static_cast<i64>(squareBit(square)));
+            return _mm512_test_epi64_mask(std::bit_cast<__m512i>(m_bbs), bit);
         }
 
         BitboardSet m_bbs{};
-        std::array<Piece, 64> m_mailbox{};
     };
 } // namespace stormphrax

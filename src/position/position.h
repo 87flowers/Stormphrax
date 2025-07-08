@@ -581,7 +581,7 @@ namespace stormphrax {
         Color m_stm{};
     };
 
-    static_assert(sizeof(Position) == 216);
+    static_assert(sizeof(Position) == 152);
 
     [[nodiscard]] Square squareFromString(std::string_view str);
 } // namespace stormphrax
