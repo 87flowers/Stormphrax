@@ -150,7 +150,7 @@ all: native release
 
 .PHONY: all
 
-.DEFAULT_GOAL := axv512
+.DEFAULT_GOAL := avx2-bmi2
 
 ifdef NO_EVALFILE_SET
 $(EVALFILE):
