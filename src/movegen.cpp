@@ -78,8 +78,8 @@ namespace stormphrax {
 
             const auto* table = reinterpret_cast<const __m512i*>(kSplatTable.data());
 
-            write16Moves(dst, board, _mm512_sub_epi16(_mm512_load_si512(table), offsetVec));
-            write16Moves(dst, board >> 32, _mm512_sub_epi16(_mm512_load_si512(table + 1), offsetVec));
+            write8Moves(dst, board, _mm512_sub_epi16(_mm512_load_si512(table), offsetVec));
+            write8Moves(dst, board >> 32, _mm512_sub_epi16(_mm512_load_si512(table + 1), offsetVec));
         }
 
         inline void pushStandards(ScoredMoveList& dst, Square srcSquare, Bitboard board) {
