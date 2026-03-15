@@ -18,8 +18,11 @@
 
 #include "movegen.h"
 
-#include <algorithm>
 #include <array>
+
+#if SP_HAS_AVX512 && SP_HAS_VBMI2
+    #include <immintrin.h>
+#endif
 
 #include "attacks/attacks.h"
 #include "opts.h"
@@ -28,6 +31,78 @@
 
 namespace stormphrax {
     namespace {
+#if SP_HAS_AVX512 && SP_HAS_VBMI2
+        static_assert(sizeof(Move) == sizeof(u16));
+        static_assert(offsetof(ScoredMove, move) == 0);
+        static_assert(kDefaultMoveListCapacity >= 218 + 16, "write16Moves requires additional padding for safety");
+
+        inline void write8Moves(ScoredMoveList& dst, u32 mask, __m512i table) {
+            dst.unsafeWrite([&](ScoredMove* ptr) {
+                auto* target = reinterpret_cast<__m512i*>(ptr);
+                const auto toWrite = _mm512_maskz_compress_epi16(mask, table);
+                _mm512_storeu_si512(target, _mm512_cvtepi16_epi64(_mm512_castsi512_si128(toWrite)));
+                return std::popcount(mask);
+            });
+        }
+
+        inline void write16Moves(ScoredMoveList& dst, u32 mask, __m512i table) {
+            dst.unsafeWrite([&](ScoredMove* ptr) {
+                auto* target = reinterpret_cast<__m512i*>(ptr);
+                const auto toWrite = _mm512_maskz_compress_epi16(mask, table);
+                _mm512_storeu_si512(target, _mm512_cvtepi16_epi64(_mm512_castsi512_si128(toWrite)));
+                _mm512_storeu_si512(target + 1, _mm512_cvtepi16_epi64(_mm512_extracti32x4_epi32(toWrite, 1)));
+                return std::popcount(mask);
+            });
+        }
+
+        inline void pushStandards(ScoredMoveList& dst, i32 offset, Bitboard board) {
+            alignas(64) static constexpr auto kSplatTable = [] {
+                std::array<Move, Squares::kCount> table;
+                for (i32 idx = 0; idx < Squares::kCount; ++idx) {
+                    const auto fromSq = Square::fromRaw(idx);
+                    const auto toSq = Square::fromRaw(idx);
+                    table[idx] = Move::standard(fromSq, toSq);
+                }
+                return table;
+            }();
+
+            if (board.empty()) {
+                return;
+            }
+
+            static_assert(Move::standard(Square::fromRaw(0), Square::fromRaw(1)).data() == (1 << 4));
+            const auto offsetVec = _mm512_set1_epi16(static_cast<i16>(offset << 4));
+
+            const auto* table = reinterpret_cast<const __m512i*>(kSplatTable.data());
+
+            write8Moves(dst, board, _mm512_sub_epi16(_mm512_load_si512(table), offsetVec));
+            write8Moves(dst, board >> 32, _mm512_sub_epi16(_mm512_load_si512(table + 1), offsetVec));
+        }
+
+        inline void pushStandards(ScoredMoveList& dst, Square srcSquare, Bitboard board) {
+            static constexpr auto kZeroSquare = Square::fromRaw(0);
+
+            alignas(64) static constexpr auto kSplatTable = [] {
+                std::array<Move, Squares::kCount> table;
+                for (i32 toIdx = 0; toIdx < Squares::kCount; ++toIdx) {
+                    const auto toSq = Square::fromRaw(toIdx);
+                    table[toIdx] = Move::standard(kZeroSquare, toSq);
+                }
+                return table;
+            }();
+
+            if (board.empty()) {
+                return;
+            }
+
+            const auto* table = reinterpret_cast<const __m512i*>(kSplatTable.data());
+
+            const auto froms = _mm512_set1_epi16(static_cast<i16>(Move::standard(srcSquare, kZeroSquare).data()));
+
+            write16Moves(dst, board, _mm512_or_si512(froms, _mm512_load_si512(table)));
+            write16Moves(dst, board >> 32, _mm512_or_si512(froms, _mm512_load_si512(table + 1)));
+        }
+#else
         inline void pushStandards(ScoredMoveList& dst, i32 offset, Bitboard board) {
             for (const auto dstSquare : board) {
                 const auto srcSquare = dstSquare.offset(-offset);
@@ -40,6 +115,7 @@ namespace stormphrax {
                 dst.push({Move::standard(srcSquare, dstSquare), 0});
             }
         }
+#endif
 
         inline void pushQueenPromotions(ScoredMoveList& noisy, i32 offset, Bitboard board) {
             for (const auto dstSquare : board) {
@@ -324,13 +400,13 @@ namespace stormphrax {
                 pushStandards(dst, src, attacks & dstMask);
             }
 
-            for (const auto src : rooks & pinned) {
+            for (const auto src : rooks& pinned) {
                 const auto pinRay = rayPast(king, src);
                 const auto attacks = attacks::getRookAttacks(src, occupancy);
                 pushStandards(dst, src, attacks & dstMask & pinRay);
             }
 
-            for (const auto src : bishops & pinned) {
+            for (const auto src : bishops& pinned) {
                 const auto pinRay = rayPast(king, src);
                 const auto attacks = attacks::getBishopAttacks(src, occupancy);
                 pushStandards(dst, src, attacks & dstMask & pinRay);
