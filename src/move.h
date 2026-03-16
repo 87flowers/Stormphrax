@@ -37,10 +37,14 @@ namespace stormphrax {
 
     class Move {
     public:
+        static inline constexpr i32 kFromSqShift = 10;
+        static inline constexpr i32 kToSqShift = 4;
+        static inline constexpr i32 kPromoShift = 2;
+
         constexpr Move() = default;
 
         [[nodiscard]] constexpr usize fromSqIdx() const {
-            return m_move >> 10;
+            return m_move >> kFromSqShift;
         }
 
         [[nodiscard]] constexpr Square fromSq() const {
@@ -48,15 +52,15 @@ namespace stormphrax {
         }
 
         [[nodiscard]] constexpr i32 fromSqRank() const {
-            return m_move >> 13;
+            return m_move >> (kFromSqShift + 3);
         }
 
         [[nodiscard]] constexpr i32 fromSqFile() const {
-            return (m_move >> 10) & 0x7;
+            return (m_move >> kFromSqShift) & 0x7;
         }
 
         [[nodiscard]] constexpr usize toSqIdx() const {
-            return (m_move >> 4) & 0x3F;
+            return (m_move >> kToSqShift) & 0x3F;
         }
 
         [[nodiscard]] constexpr Square toSq() const {
@@ -64,15 +68,15 @@ namespace stormphrax {
         }
 
         [[nodiscard]] constexpr i32 toSqRank() const {
-            return (m_move >> 7) & 0x7;
+            return (m_move >> (kToSqShift + 3)) & 0x7;
         }
 
         [[nodiscard]] constexpr i32 toSqFile() const {
-            return (m_move >> 4) & 0x7;
+            return (m_move >> kToSqShift) & 0x7;
         }
 
         [[nodiscard]] constexpr usize promoIdx() const {
-            return (m_move >> 2) & 0x3;
+            return (m_move >> kPromoShift) & 0x3;
         }
 
         [[nodiscard]] constexpr PieceType promo() const {
@@ -98,24 +102,29 @@ namespace stormphrax {
         constexpr bool operator==(const Move& other) const = default;
 
         [[nodiscard]] static constexpr Move standard(Square src, Square dst) {
-            return Move{static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kStandard))};
+            return Move{static_cast<u16>(
+                (src.raw() << kFromSqShift) | (dst.raw() << kToSqShift) | static_cast<u16>(MoveType::kStandard)
+            )};
         }
 
         [[nodiscard]] static constexpr Move promotion(Square src, Square dst, PieceType promo) {
             assert(promo.isValidPromotion());
             return Move{static_cast<u16>(
-                (src.raw() << 10) | (dst.raw() << 4) | ((promo.raw() - 1) << 2) | static_cast<u16>(MoveType::kPromotion)
+                (src.raw() << kFromSqShift) | (dst.raw() << kToSqShift) | ((promo.raw() - 1) << kPromoShift)
+                | static_cast<u16>(MoveType::kPromotion)
             )};
         }
 
         [[nodiscard]] static constexpr Move castling(Square src, Square dst) {
-            return Move{static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kCastling))};
+            return Move{static_cast<u16>(
+                (src.raw() << kFromSqShift) | (dst.raw() << kToSqShift) | static_cast<u16>(MoveType::kCastling)
+            )};
         }
 
         [[nodiscard]] static constexpr Move enPassant(Square src, Square dst) {
-            return Move{
-                static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kEnPassant))
-            };
+            return Move{static_cast<u16>(
+                (src.raw() << kFromSqShift) | (dst.raw() << kToSqShift) | static_cast<u16>(MoveType::kEnPassant)
+            )};
         }
 
     private:

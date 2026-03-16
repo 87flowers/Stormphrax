@@ -36,72 +36,60 @@ namespace stormphrax {
         static_assert(sizeof(ScoredMove) == sizeof(u64));
         static_assert(offsetof(ScoredMove, move) == 0);
         static_assert(kDefaultMoveListCapacity >= 218 + 16, "write16Moves requires additional padding for safety");
+        static_assert(static_cast<u16>(MoveType::kStandard) == 0);
 
-        static constexpr auto kZeroSquare = Square::fromRaw(0);
-
-        inline void write8Moves(ScoredMoveList& dst, u32 mask, __m512i table) {
-            dst.unsafeWrite([&](ScoredMove* ptr) {
-                auto* target = reinterpret_cast<__m512i*>(ptr);
-                const auto toWrite = _mm512_maskz_compress_epi16(mask, table);
-                _mm512_storeu_si512(target, _mm512_cvtepu16_epi64(_mm512_castsi512_si128(toWrite)));
-                return std::popcount(mask);
-            });
-        }
-
-        inline void write16Moves(ScoredMoveList& dst, u32 mask, __m512i table) {
-            dst.unsafeWrite([&](ScoredMove* ptr) {
-                auto* target = reinterpret_cast<__m512i*>(ptr);
-                const auto toWrite = _mm512_maskz_compress_epi16(mask, table);
-                _mm512_storeu_si512(target, _mm512_cvtepu16_epi64(_mm512_castsi512_si128(toWrite)));
-                _mm512_storeu_si512(target + 1, _mm512_cvtepu16_epi64(_mm512_extracti32x4_epi32(toWrite, 1)));
-                return std::popcount(mask);
-            });
-        }
+        alignas(64) static constexpr auto kSplatTable = [] {
+            std::array<Square, Squares::kCount> table;
+            for (i32 idx = 0; idx < Squares::kCount; ++idx) {
+                table[idx] = Square::fromRaw(idx);
+            }
+            return table;
+        }();
 
         inline void pushStandards(ScoredMoveList& dst, i32 offset, Bitboard board) {
-            alignas(64) static constexpr auto kSplatTable = [] {
-                std::array<Move, Squares::kCount> table;
-                for (i32 idx = 0; idx < Squares::kCount; ++idx) {
-                    const auto fromSq = Square::fromRaw(idx);
-                    const auto toSq = Square::fromRaw(idx);
-                    table[idx] = Move::standard(fromSq, toSq);
-                }
-                return table;
-            }();
-
             if (board.empty()) {
                 return;
             }
 
-            static_assert(Move::standard(kZeroSquare, kZeroSquare).data() == 0);
-            const auto offsetVec = _mm512_set1_epi16(Move::standard(Square::fromRaw(offset), kZeroSquare).data());
+            const auto offsetVec = _mm512_set1_epi64(static_cast<i64>(offset));
 
             const auto* table = reinterpret_cast<const __m512i*>(kSplatTable.data());
+            const auto squares = _mm512_cvtepu8_epi64(
+                _mm512_castsi512_si128(_mm512_maskz_compress_epi8(board, _mm512_load_si512(table)))
+            );
+            const auto toWrite = _mm512_or_si512(
+                _mm512_slli_epi64(_mm512_sub_epi64(squares, offsetVec), Move::kFromSqShift),
+                _mm512_slli_epi64(squares, Move::kToSqShift)
+            );
 
-            write8Moves(dst, board, _mm512_sub_epi16(_mm512_load_si512(table), offsetVec));
-            write8Moves(dst, board >> 32, _mm512_sub_epi16(_mm512_load_si512(table + 1), offsetVec));
+            dst.unsafeWrite([&](ScoredMove* ptr) {
+                auto* target = reinterpret_cast<__m512i*>(ptr);
+                _mm512_storeu_si512(target, toWrite);
+                return board.popcount();
+            });
         }
 
         inline void pushStandards(ScoredMoveList& dst, Square srcSquare, Bitboard board) {
-            alignas(64) static constexpr auto kSplatTable = [] {
-                std::array<Move, Squares::kCount> table;
-                for (i32 toIdx = 0; toIdx < Squares::kCount; ++toIdx) {
-                    const auto toSq = Square::fromRaw(toIdx);
-                    table[toIdx] = Move::standard(kZeroSquare, toSq);
-                }
-                return table;
-            }();
-
             if (board.empty()) {
                 return;
             }
 
+            const auto fromVec = _mm512_set1_epi64(static_cast<i64>(srcSquare.raw()) << Move::kFromSqShift);
+
             const auto* table = reinterpret_cast<const __m512i*>(kSplatTable.data());
+            const auto squares = _mm512_maskz_compress_epi8(board, _mm512_load_si512(table));
+            const auto squares0 = _mm512_cvtepu8_epi64(_mm512_castsi512_si128(squares));
+            const auto squares1 =
+                _mm512_cvtepu8_epi64(_mm_unpackhi_epi64(_mm512_castsi512_si128(squares), _mm_setzero_si128()));
+            const auto toWrite0 = _mm512_or_si512(_mm512_slli_epi64(squares0, Move::kToSqShift), fromVec);
+            const auto toWrite1 = _mm512_or_si512(_mm512_slli_epi64(squares1, Move::kToSqShift), fromVec);
 
-            const auto froms = _mm512_set1_epi16(static_cast<i16>(Move::standard(srcSquare, kZeroSquare).data()));
-
-            write16Moves(dst, board, _mm512_or_si512(froms, _mm512_load_si512(table)));
-            write16Moves(dst, board >> 32, _mm512_or_si512(froms, _mm512_load_si512(table + 1)));
+            dst.unsafeWrite([&](ScoredMove* ptr) {
+                auto* target = reinterpret_cast<__m512i*>(ptr);
+                _mm512_storeu_si512(target, toWrite0);
+                _mm512_storeu_si512(target + 1, toWrite1);
+                return board.popcount();
+            });
         }
 #else
         inline void pushStandards(ScoredMoveList& dst, i32 offset, Bitboard board) {
