@@ -34,6 +34,22 @@ namespace stormphrax::eval::nnue::features::psq {
         Square attackedSq;
     };
 
+    struct FocusThreatUpdate {
+        std::array<Square, 64> otherSqs;
+        std::array<Piece, 64> others;
+        u64 set;
+        Piece focus;
+        Square focusSq;
+        bool outgoing;
+    };
+
+    struct DiscoveredThreatUpdate {
+        std::array<Square, 64> squares;
+        std::array<Piece, 64> pieces;
+        u64 sliders;
+        u64 victims;
+    };
+
     struct PsqFeaturesBase {
         static constexpr bool kThreatInputs = false;
         static constexpr bool kPawnPawnInputs = false;
@@ -48,6 +64,11 @@ namespace stormphrax::eval::nnue::features::psq {
 
             StaticVector<PieceSquare, 2> sub{};
             StaticVector<PieceSquare, 2> add{};
+
+            static constexpr std::array<FocusThreatUpdate, 0> focusThreatsAdded{};
+            static constexpr std::array<FocusThreatUpdate, 0> focusThreatsRemoved{};
+            static constexpr std::array<DiscoveredThreatUpdate, 0> discoveredThreatsAdded{};
+            static constexpr std::array<DiscoveredThreatUpdate, 0> discoveredThreatsRemoved{};
 
             static constexpr std::array<Bitboard, 0> pawnBbsBefore{};
             static constexpr std::array<Bitboard, 0> pawnBbsAfter{};

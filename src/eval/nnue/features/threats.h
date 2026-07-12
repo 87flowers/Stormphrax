@@ -35,26 +35,10 @@ namespace stormphrax::eval::nnue::features::threats {
     constexpr usize kMaxThreatsAdded = 128;
     constexpr usize kMaxThreatsRemoved = 128;
 
-    struct FocusThreatUpdate {
-        std::array<Square, 64> otherSqs;
-        std::array<Piece, 64> others;
-        u64 set;
-        Piece focus;
-        Square focusSq;
-        bool outgoing;
-    };
-
-    struct DiscoveredThreatUpdate {
-        std::array<Square, 64> squares;
-        std::array<Piece, 64> pieces;
-        u64 sliders;
-        u64 victims;
-    };
-
-    using AddedFocusThreatList = StaticVector<FocusThreatUpdate, 4>;
-    using RemovedFocusThreatList = StaticVector<FocusThreatUpdate, 4>;
-    using AddedDiscoveredThreatList = StaticVector<DiscoveredThreatUpdate, 2>;
-    using RemovedDiscoveredThreatList = StaticVector<DiscoveredThreatUpdate, 2>;
+    using AddedFocusThreatList = StaticVector<psq::FocusThreatUpdate, 4>;
+    using RemovedFocusThreatList = StaticVector<psq::FocusThreatUpdate, 4>;
+    using AddedDiscoveredThreatList = StaticVector<psq::DiscoveredThreatUpdate, 2>;
+    using RemovedDiscoveredThreatList = StaticVector<psq::DiscoveredThreatUpdate, 2>;
 
     template <typename PsqFeatureSet>
     struct ThreatInputs : PsqFeatureSet {
