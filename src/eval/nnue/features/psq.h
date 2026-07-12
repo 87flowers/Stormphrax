@@ -49,9 +49,6 @@ namespace stormphrax::eval::nnue::features::psq {
             StaticVector<PieceSquare, 2> sub{};
             StaticVector<PieceSquare, 2> add{};
 
-            static constexpr StaticVector<ThreatDescriptor, 0> threatsAdded{};
-            static constexpr StaticVector<ThreatDescriptor, 0> threatsRemoved{};
-
             static constexpr std::array<Bitboard, 0> pawnBbsBefore{};
             static constexpr std::array<Bitboard, 0> pawnBbsAfter{};
 

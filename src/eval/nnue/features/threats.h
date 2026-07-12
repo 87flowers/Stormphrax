@@ -35,8 +35,26 @@ namespace stormphrax::eval::nnue::features::threats {
     constexpr usize kMaxThreatsAdded = 128;
     constexpr usize kMaxThreatsRemoved = 128;
 
-    using AddedThreatList = StaticVector<psq::ThreatDescriptor, kMaxThreatsAdded>;
-    using RemovedThreatList = StaticVector<psq::ThreatDescriptor, kMaxThreatsRemoved>;
+    struct FocusThreatUpdate {
+        std::array<Square, 64> otherSqs;
+        std::array<Piece, 64> others;
+        u64 set;
+        Piece focus;
+        Square focusSq;
+        bool outgoing;
+    };
+
+    struct DiscoveredThreatUpdate {
+        std::array<Square, 64> squares;
+        std::array<Piece, 64> pieces;
+        u64 sliders;
+        u64 victims;
+    };
+
+    using AddedFocusThreatList = StaticVector<FocusThreatUpdate, 4>;
+    using RemovedFocusThreatList = StaticVector<FocusThreatUpdate, 4>;
+    using AddedDiscoveredThreatList = StaticVector<DiscoveredThreatUpdate, 2>;
+    using RemovedDiscoveredThreatList = StaticVector<DiscoveredThreatUpdate, 2>;
 
     template <typename PsqFeatureSet>
     struct ThreatInputs : PsqFeatureSet {
@@ -47,8 +65,10 @@ namespace stormphrax::eval::nnue::features::threats {
             // black, white
             std::array<bool, 2> refreshThreats{};
 
-            AddedThreatList threatsAdded{};
-            RemovedThreatList threatsRemoved{};
+            AddedFocusThreatList focusThreatsAdded{};
+            RemovedFocusThreatList focusThreatsRemoved{};
+            AddedDiscoveredThreatList discoveredThreatsAdded{};
+            RemovedDiscoveredThreatList discoveredThreatsRemoved{};
 
             inline void setThreatRefresh(Color c) {
                 refreshThreats[c.idx()] = true;
@@ -58,21 +78,67 @@ namespace stormphrax::eval::nnue::features::threats {
                 return refreshThreats[c.idx()];
             }
 
-            inline void addThreatFeature(Piece attacker, Square attackerSq, Piece attacked, Square attackedSq) {
-                threatsAdded.push({
-                    .attacker = attacker,
-                    .attackerSq = attackerSq,
-                    .attacked = attacked,
-                    .attackedSq = attackedSq,
+            inline void addFocusThreatFeatures(
+                bool outgoing,
+                std::array<Square, 64> otherSqs,
+                std::array<Piece, 64> others,
+                u64 set,
+                Piece focus,
+                Square focusSq
+            ) {
+                focusThreatsAdded.push({
+                    .otherSqs = otherSqs,
+                    .others = others,
+                    .set = set,
+                    .focus = focus,
+                    .focusSq = focusSq,
+                    .outgoing = outgoing,
                 });
             }
 
-            inline void removeThreatFeature(Piece attacker, Square attackerSq, Piece attacked, Square attackedSq) {
-                threatsRemoved.push({
-                    .attacker = attacker,
-                    .attackerSq = attackerSq,
-                    .attacked = attacked,
-                    .attackedSq = attackedSq,
+            inline void removeFocusThreatFeatures(
+                bool outgoing,
+                std::array<Square, 64> otherSqs,
+                std::array<Piece, 64> others,
+                u64 set,
+                Piece focus,
+                Square focusSq
+            ) {
+                focusThreatsRemoved.push({
+                    .otherSqs = otherSqs,
+                    .others = others,
+                    .set = set,
+                    .focus = focus,
+                    .focusSq = focusSq,
+                    .outgoing = outgoing,
+                });
+            }
+
+            inline void addDiscoveredThreatFeatures(
+                std::array<Square, 64> squares,
+                std::array<Piece, 64> pieces,
+                u64 sliders,
+                u64 victims
+            ) {
+                discoveredThreatsAdded.push({
+                    .squares = squares,
+                    .pieces = pieces,
+                    .sliders = sliders,
+                    .victims = victims,
+                });
+            }
+
+            inline void removeDiscoveredThreatFeatures(
+                std::array<Square, 64> squares,
+                std::array<Piece, 64> pieces,
+                u64 sliders,
+                u64 victims
+            ) {
+                discoveredThreatsRemoved.push({
+                    .squares = squares,
+                    .pieces = pieces,
+                    .sliders = sliders,
+                    .victims = victims,
                 });
             }
         };

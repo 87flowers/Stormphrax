@@ -325,165 +325,6 @@ namespace stormphrax::eval {
         return {header.name.data(), header.nameLen};
     }
 
-    namespace {
-        namespace geometry = nnue::features::threats::geometry;
-        using UpdatedThreat = nnue::features::psq::ThreatDescriptor;
-
-#if SP_HAS_VBMI2
-        static_assert(sizeof(UpdatedThreat) == sizeof(u32));
-        static_assert(offsetof(UpdatedThreat, attacker) == 0 * sizeof(u8));
-        static_assert(offsetof(UpdatedThreat, attackerSq) == 1 * sizeof(u8));
-        static_assert(offsetof(UpdatedThreat, attacked) == 2 * sizeof(u8));
-        static_assert(offsetof(UpdatedThreat, attackedSq) == 3 * sizeof(u8));
-
-        template <bool kAdd, bool kOutgoing>
-        inline void pushFocusThreatFeatures(
-            NnueUpdates& updates,
-            geometry::Vector indexes, // List of square indexes
-            geometry::Vector rays,    // List of pieces on those squares as indexed by indexes
-            geometry::Bitrays br,     // Bitrays where bit set is a piece attacked/being attacked by focus square
-            Piece piece,              // Piece on the focus square
-            Square sq                 // The focus square
-        ) {
-            // Create the (piecea, squarea, pieceb, squareb) tuples.
-            // Whether pair1 or pair2 is paira or pairb is determined by kOutgoing.
-
-            // clang-format off
-            const auto pair2Shuffle = _mm512_set_epi8(
-                79, 15, 79, 15, 78, 14, 78, 14, 77, 13, 77, 13, 76, 12, 76, 12, 75, 11, 75, 11,
-                74, 10, 74, 10, 73, 9, 73, 9, 72, 8, 72, 8, 71, 7, 71, 7, 70, 6, 70, 6, 69, 5,
-                69, 5, 68, 4, 68, 4, 67, 3, 67, 3, 66, 2, 66, 2, 65, 1, 65, 1, 64, 0, 64, 0
-            );
-            // clang-format on
-
-            // Focus pair
-            const auto pair1 = _mm512_set1_epi16(static_cast<i16>(piece.idx() | (sq.idx() << 8)));
-
-            // Non-focus pair
-            const auto pair2Sq = _mm512_maskz_compress_epi8(br, indexes.raw);
-            const auto pair2Piece = _mm512_maskz_compress_epi8(br, rays.raw);
-            const auto pair2 = _mm512_permutex2var_epi8(pair2Piece, pair2Shuffle, pair2Sq);
-
-            // Select which is the attacker and which is the victim.
-            constexpr u64 mask = kOutgoing ? 0xCCCCCCCCCCCCCCCC : 0x3333333333333333;
-            const auto vector = _mm512_mask_mov_epi8(pair1, mask, pair2);
-
-            // threatsAdded and threatsRemoved are constexpr without threat inputs
-            if constexpr (InputFeatureSet::kThreatInputs) {
-                (kAdd ? updates.threatsAdded : updates.threatsRemoved).unsafeWrite([&](UpdatedThreat* ptr) {
-                    _mm512_storeu_si512(ptr, vector);
-                    return std::popcount(br);
-                });
-            }
-        }
-
-        template <bool kAdd>
-        inline void pushDiscoveredThreatFeatures(
-            NnueUpdates& updates,
-            geometry::Vector indexes, // Squares
-            geometry::Vector rays,    // Pieces
-            geometry::Bitrays sliders,
-            geometry::Bitrays victims
-        ) {
-            const auto count = std::popcount(victims);
-            assert(std::popcount(victims) == std::popcount(sliders));
-
-            // Create the (piece1, square1, piece2, square2) tuples.
-
-            const auto p1 = _mm512_castsi512_si128(_mm512_maskz_compress_epi8(sliders, rays.raw));
-            const auto sq1 = _mm512_castsi512_si128(_mm512_maskz_compress_epi8(sliders, indexes.raw));
-            const auto p2 = _mm512_castsi512_si128(_mm512_maskz_compress_epi8(victims, rays.flip().raw));
-            const auto sq2 = _mm512_castsi512_si128(_mm512_maskz_compress_epi8(victims, indexes.flip().raw));
-
-            const auto pair1 = _mm_unpacklo_epi8(p1, sq1);
-            const auto pair2 = _mm_unpacklo_epi8(p2, sq2);
-
-            const auto tuple1 = _mm_unpacklo_epi16(pair1, pair2);
-            const auto tuple2 = _mm_unpackhi_epi16(pair1, pair2);
-
-            // see above
-            if constexpr (InputFeatureSet::kThreatInputs) {
-                // Opposite polarity:
-                // - Adding focus piece removes x-ray threats (a.k.a. slider threat retraction)
-                // - Removing focus piece adds x-ray threats (a.k.a. slider threat extension)
-                (kAdd ? updates.threatsRemoved : updates.threatsAdded).unsafeWrite([&](UpdatedThreat* ptr) {
-                    _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr) + 0, tuple1);
-                    _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr) + 1, tuple2);
-                    return count;
-                });
-            }
-        }
-#else
-        template <bool kAdd, bool kOutgoing>
-        inline void pushFocusThreatFeatures(
-            NnueUpdates& updates,
-            geometry::Vector indexes, // List of square indexes
-            geometry::Vector rays,    // List of pieces on those squares as indexed by indexes
-            geometry::Bitrays br,     // Bitrays where bit set is a piece attacked/being attacked by focus square
-            Piece piece,              // Piece on the focus square
-            Square sq                 // The focus square
-        ) {
-            std::array<Piece, 64> others;
-            std::memcpy(others.data(), &rays, sizeof(others));
-            std::array<Square, 64> otherSqs;
-            std::memcpy(otherSqs.data(), &indexes, sizeof(otherSqs));
-
-            for (; br; br = util::resetLsb(br)) {
-                const auto i = util::ctz(br);
-
-                const auto other = others[i];
-                const auto otherSq = otherSqs[i];
-
-                const auto attacker = kOutgoing ? piece : other;
-                const auto attackerSq = kOutgoing ? sq : otherSq;
-                const auto attacked = kOutgoing ? other : piece;
-                const auto attackedSq = kOutgoing ? otherSq : sq;
-
-                if constexpr (kAdd) {
-                    updates.addThreatFeature(attacker, attackerSq, attacked, attackedSq);
-                } else {
-                    updates.removeThreatFeature(attacker, attackerSq, attacked, attackedSq);
-                }
-            }
-        }
-
-        template <bool kAdd>
-        inline void pushDiscoveredThreatFeatures(
-            NnueUpdates& updates,
-            geometry::Vector indexes, // Squares
-            geometry::Vector rays,    // Pieces
-            geometry::Bitrays sliders,
-            geometry::Bitrays victims
-        ) {
-            std::array<Piece, 64> pieces;
-            std::memcpy(pieces.data(), &rays, sizeof(pieces));
-            std::array<Square, 64> squares;
-            std::memcpy(squares.data(), &indexes, sizeof(squares));
-
-            for (; sliders; sliders = util::resetLsb(sliders), victims = util::resetLsb(victims)) {
-                const auto slider = util::ctz(sliders);
-                const auto victim = util::ctz(victims);
-
-                const auto attacker = pieces[slider];
-                const auto attackerSq = squares[slider];
-                const auto attacked = pieces[(victim + 32) % 64];
-                const auto attackedSq = squares[(victim + 32) % 64];
-
-                // Opposite polarity:
-                // - Adding focus piece removes x-ray threats (a.k.a. slider threat retraction)
-                // - Removing focus piece adds x-ray threats (a.k.a. slider threat extension)
-                if constexpr (kAdd) {
-                    updates.removeThreatFeature(attacker, attackerSq, attacked, attackedSq);
-                } else {
-                    updates.addThreatFeature(attacker, attackerSq, attacked, attackedSq);
-                }
-            }
-
-            assert(!sliders && !victims);
-        }
-#endif
-    } // namespace
-
     template void updatePieceThreatsOnChange<false>(NnueUpdates&, const Position&, Piece, Square);
     template void updatePieceThreatsOnChange<true>(NnueUpdates&, const Position&, Piece, Square);
 
@@ -502,8 +343,41 @@ namespace stormphrax::eval {
         const auto incomingSliders = geometry::incomingSliders(bits, closest);
 
         // Push all focus square relative threats.
-        pushFocusThreatFeatures<kAdd, true>(updates, permutation.indexes, rays, outgoingThreats, piece, sq);
-        pushFocusThreatFeatures<kAdd, false>(updates, permutation.indexes, rays, incomingAttackers, piece, sq);
+        if constexpr (kAdd) {
+            updates.addFocusThreatFeatures(
+                true,
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                outgoingThreats,
+                piece,
+                sq
+            );
+            updates.addFocusThreatFeatures(
+                false,
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                incomingAttackers,
+                piece,
+                sq
+            );
+        } else {
+            updates.removeFocusThreatFeatures(
+                true,
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                outgoingThreats,
+                piece,
+                sq
+            );
+            updates.removeFocusThreatFeatures(
+                false,
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                incomingAttackers,
+                piece,
+                sq
+            );
+        }
 
         // Discover threat updates from sliders whose threats needs to be extended (if focus piece removed)
         // or retracted (if focus piece added).
@@ -513,13 +387,21 @@ namespace stormphrax::eval {
         const auto victimMask = std::rotr(closest & 0xFEFEFEFEFEFEFEFE, 32);
         const auto valid = geometry::rayFill(victimMask) & geometry::rayFill(incomingSliders);
 
-        pushDiscoveredThreatFeatures<kAdd>(
-            updates,
-            permutation.indexes,
-            rays,
-            incomingSliders & valid,
-            victimMask & valid
-        );
+        if constexpr (kAdd) {
+            updates.removeDiscoveredThreatFeatures(
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                incomingSliders & valid,
+                victimMask & valid
+            );
+        } else {
+            updates.addDiscoveredThreatFeatures(
+                permutation.indexes.toArray<Square>(),
+                rays.toArray<Piece>(),
+                incomingSliders & valid,
+                victimMask & valid
+            );
+        }
     }
 
     void updatePieceThreatsOnMutate(
@@ -542,10 +424,38 @@ namespace stormphrax::eval {
         const auto incomingAttackers = geometry::incomingAttackers(bits, closest);
 
         // Push all focus square relative threats.
-        pushFocusThreatFeatures<false, true>(updates, permutation.indexes, rays, oldOutgoingThreats, oldPiece, sq);
-        pushFocusThreatFeatures<true, true>(updates, permutation.indexes, rays, newOutgoingThreats, newPiece, sq);
-        pushFocusThreatFeatures<false, false>(updates, permutation.indexes, rays, incomingAttackers, oldPiece, sq);
-        pushFocusThreatFeatures<true, false>(updates, permutation.indexes, rays, incomingAttackers, newPiece, sq);
+        updates.removeFocusThreatFeatures(
+            true,
+            permutation.indexes.toArray<Square>(),
+            rays.toArray<Piece>(),
+            oldOutgoingThreats,
+            oldPiece,
+            sq
+        );
+        updates.addFocusThreatFeatures(
+            true,
+            permutation.indexes.toArray<Square>(),
+            rays.toArray<Piece>(),
+            newOutgoingThreats,
+            newPiece,
+            sq
+        );
+        updates.removeFocusThreatFeatures(
+            false,
+            permutation.indexes.toArray<Square>(),
+            rays.toArray<Piece>(),
+            incomingAttackers,
+            oldPiece,
+            sq
+        );
+        updates.addFocusThreatFeatures(
+            false,
+            permutation.indexes.toArray<Square>(),
+            rays.toArray<Piece>(),
+            incomingAttackers,
+            newPiece,
+            sq
+        );
     }
 
     void updatePieceThreatsOnMove(
@@ -572,27 +482,53 @@ namespace stormphrax::eval {
         const auto srcIncomingSliders = geometry::incomingSliders(srcBits, srcClosest);
         const auto dstIncomingSliders = geometry::incomingSliders(dstBits, dstClosest);
 
-        pushFocusThreatFeatures<false, true>(updates, srcPerm.indexes, srcRays, srcOutgoingThreats, oldPiece, src);
-        pushFocusThreatFeatures<true, true>(updates, dstPerm.indexes, dstRays, dstOutgoingThreats, newPiece, dst);
-        pushFocusThreatFeatures<false, false>(updates, srcPerm.indexes, srcRays, srcIncomingAttackers, oldPiece, src);
-        pushFocusThreatFeatures<true, false>(updates, dstPerm.indexes, dstRays, dstIncomingAttackers, newPiece, dst);
+        updates.removeFocusThreatFeatures(
+            true,
+            srcPerm.indexes.toArray<Square>(),
+            srcRays.toArray<Piece>(),
+            srcOutgoingThreats,
+            oldPiece,
+            src
+        );
+        updates.addFocusThreatFeatures(
+            true,
+            dstPerm.indexes.toArray<Square>(),
+            dstRays.toArray<Piece>(),
+            dstOutgoingThreats,
+            newPiece,
+            dst
+        );
+        updates.removeFocusThreatFeatures(
+            false,
+            srcPerm.indexes.toArray<Square>(),
+            srcRays.toArray<Piece>(),
+            srcIncomingAttackers,
+            oldPiece,
+            src
+        );
+        updates.addFocusThreatFeatures(
+            false,
+            dstPerm.indexes.toArray<Square>(),
+            dstRays.toArray<Piece>(),
+            dstIncomingAttackers,
+            newPiece,
+            dst
+        );
 
         const auto srcVictimMask = std::rotr(srcClosest & 0xFEFEFEFEFEFEFEFE, 32);
         const auto dstVictimMask = std::rotr(dstClosest & 0xFEFEFEFEFEFEFEFE, 32);
         const auto srcValid = geometry::rayFill(srcVictimMask) & geometry::rayFill(srcIncomingSliders);
         const auto dstValid = geometry::rayFill(dstVictimMask) & geometry::rayFill(dstIncomingSliders);
 
-        pushDiscoveredThreatFeatures<false>(
-            updates,
-            srcPerm.indexes,
-            srcRays,
+        updates.addDiscoveredThreatFeatures(
+            srcPerm.indexes.toArray<Square>(),
+            srcRays.toArray<Piece>(),
             srcIncomingSliders & srcValid,
             srcVictimMask & srcValid
         );
-        pushDiscoveredThreatFeatures<true>(
-            updates,
-            dstPerm.indexes,
-            dstRays,
+        updates.removeDiscoveredThreatFeatures(
+            dstPerm.indexes.toArray<Square>(),
+            dstRays.toArray<Piece>(),
             dstIncomingSliders & dstValid,
             dstVictimMask & dstValid
         );

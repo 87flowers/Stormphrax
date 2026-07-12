@@ -21,13 +21,14 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <span>
 #include <numeric>
+#include <span>
 
 #include "../attacks/attacks.h"
 #include "../util/static_vector.h"
 
 #include "nnue.h"
+#include "nnue/features/threats/push.h"
 
 namespace stormphrax::eval {
     namespace {
@@ -357,21 +358,69 @@ namespace stormphrax::eval {
             assert(!ctx.updates.requiresThreatRefresh(c));
 
             using namespace nnue::features::threats;
+            using namespace nnue::features::threats::push;
 
             const auto kingSq = ctx.kings.color(c);
             const auto& ft = network.featureTransformer();
 
             auto acc = curr.threatAcc[0].forColor(c);
 
+            StaticVector<nnue::features::psq::ThreatDescriptor, 128> threatsAdded;
+            StaticVector<nnue::features::psq::ThreatDescriptor, 128> threatsRemoved;
+
+            for (const auto& threats : ctx.updates.focusThreatsAdded) {
+                pushFocusThreatFeatures(
+                    threatsAdded,
+                    threats.outgoing,
+                    threats.otherSqs,
+                    threats.others,
+                    threats.set,
+                    threats.focus,
+                    threats.focusSq
+                );
+            }
+
+            for (const auto& threats : ctx.updates.focusThreatsRemoved) {
+                pushFocusThreatFeatures(
+                    threatsRemoved,
+                    threats.outgoing,
+                    threats.otherSqs,
+                    threats.others,
+                    threats.set,
+                    threats.focus,
+                    threats.focusSq
+                );
+            }
+
+            for (const auto& threats : ctx.updates.discoveredThreatsAdded) {
+                pushDiscoveredThreatFeatures(
+                    threatsAdded,
+                    threats.squares,
+                    threats.pieces,
+                    threats.sliders,
+                    threats.victims
+                );
+            }
+
+            for (const auto& threats : ctx.updates.discoveredThreatsRemoved) {
+                pushDiscoveredThreatFeatures(
+                    threatsRemoved,
+                    threats.squares,
+                    threats.pieces,
+                    threats.sliders,
+                    threats.victims
+                );
+            }
+
             StaticVector<u16, kMaxThreatsAdded + 16 * InputFeatureSet::kPawnPawnInputs> addIndices;
             StaticVector<u16, kMaxThreatsRemoved + 40 * InputFeatureSet::kPawnPawnInputs> subIndices;
 
-            for (const auto [attacker, attackerSq, attacked, attackedSq] : ctx.updates.threatsAdded) {
+            for (const auto [attacker, attackerSq, attacked, attackedSq] : threatsAdded) {
                 const auto feature = threatFeatureIndex(c, kingSq, attacker, attackerSq, attacked, attackedSq);
                 addIndices.pushIf(static_cast<u16>(feature), feature >= 0);
             }
 
-            for (const auto [attacker, attackerSq, attacked, attackedSq] : ctx.updates.threatsRemoved) {
+            for (const auto [attacker, attackerSq, attacked, attackedSq] : threatsRemoved) {
                 const auto feature = threatFeatureIndex(c, kingSq, attacker, attackerSq, attacked, attackedSq);
                 subIndices.pushIf(static_cast<u16>(feature), feature >= 0);
             }

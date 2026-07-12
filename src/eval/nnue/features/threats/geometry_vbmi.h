@@ -21,6 +21,7 @@
 #include "../../../../types.h"
 
 #include <array>
+#include <bit>
 #include <span>
 #include <tuple>
 
@@ -32,6 +33,11 @@ namespace stormphrax::eval::nnue::features::threats::geometry {
 
         [[nodiscard]] Vector flip() const {
             return {_mm512_shuffle_i64x2(raw, raw, 0b01001110)};
+        }
+
+        template <typename T>
+        [[nodiscard]] std::array<T, 64> toArray() const {
+            return std::bit_cast<std::array<T, 64>>(raw);
         }
     };
 
